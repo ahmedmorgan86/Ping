@@ -1046,6 +1046,19 @@ class PingMonitorApp(tk.Tk):
         self._build_tabs()
         self._build_footer()
 
+        # Set Application Icon
+        try:
+            if platform.system().lower() == "windows":
+                self.iconbitmap("icon.ico")
+            else:
+                # Linux/macOS require a PhotoImage for the icon
+                from PIL import Image, ImageTk
+                icon_img = Image.open("icon.ico")
+                self._icon_photo = ImageTk.PhotoImage(icon_img)
+                self.iconphoto(True, self._icon_photo)
+        except Exception as e:
+            print(f"Icon loading error: {e}")
+
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._refresh_kpi()
         self._tick()
