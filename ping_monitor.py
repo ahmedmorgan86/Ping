@@ -13,42 +13,42 @@ from datetime import datetime
 from collections import deque
 
 # ══════════════════════════════════════════════════════════════
-#  PALETTE  — Warm soft dark, like Linear / Notion dark mode
+#  PALETTE  — Network Nexus Dark Theme
 # ══════════════════════════════════════════════════════════════
 C = {
-    # Backgrounds — warm grey, not cold blue-black
-    "bg":        "#1a1a1f",
-    "bg2":       "#1e1e24",
-    "surface":   "#242429",
-    "surface2":  "#2a2a31",
-    "overlay":   "#303038",
-    "input":     "#1e1e24",
+    # Backgrounds — Modern Deep Navy/Black
+    "bg":        "#1B1E2B",
+    "bg2":       "#212433",
+    "surface":   "#282D3F",
+    "surface2":  "#31374A",
+    "overlay":   "#3B4252",
+    "input":     "#1B1E2B",
 
-    # Borders — subtle, warm
-    "border":    "#35353f",
-    "border2":   "#42424e",
+    # Borders
+    "border":    "#32394E",
+    "border2":   "#414868",
 
-    # Brand accent — warm indigo/violet
-    "accent":    "#8b7cf8",   # soft violet
-    "accent2":   "#a78bfa",   # lighter violet
-    "accent_bg": "#2d2640",   # violet tint bg
+    # Brand accent — Neon/Purple
+    "accent":    "#A78BFA",
+    "accent2":   "#C3B5FD",
+    "accent_bg": "#2D2640",
 
     # Semantic
-    "green":     "#4ade80",
-    "green_bg":  "#1a2e22",
-    "green_glow":"#4ade8033",
-    "red":       "#f87171",
-    "red_bg":    "#2e1a1a",
-    "red_glow":  "#f8717133",
-    "amber":     "#fbbf24",
-    "amber_bg":  "#2e2410",
-    "amber_glow":"#fbbf2433",
+    "green":     "#00FF7F",   # Neon Green
+    "green_bg":  "#1A2E2B",
+    "green_glow":"#00FF7F33",
+    "red":       "#FF4B4B",   # Neon Red
+    "red_bg":  "#2E1A1B",
+    "red_glow":  "#FF4B4B33",
+    "amber":     "#FBBF24",
+    "amber_bg":  "#2E2410",
+    "amber_glow":"#FBBF2433",
 
     # Text
-    "text":      "#f0f0f5",
-    "text2":     "#a0a0b0",
-    "text3":     "#606070",
-    "white":     "#ffffff",
+    "text":      "#FFFFFF",
+    "text2":     "#A0A0B0",
+    "text3":     "#565F89",
+    "white":     "#FFFFFF",
 }
 
 UI   = "Segoe UI"
@@ -131,20 +131,48 @@ def lerp_color(c1, c2, t):
 
 
 # ══════════════════════════════════════════════════════════════
-#  PING HELPER
+#  PING HELPER — Robust & Error-Aware
 # ══════════════════════════════════════════════════════════════
 def ping_once(host, timeout=2):
+    """
+    Performs a single ICMP ping.
+    Returns (success: bool, latency: float).
+    Special latencies: -1.0 (Timeout/General Failure), -2.0 (Permission Denied)
+    """
+    is_win = platform.system().lower() == "windows"
     cmd = (["ping", "-n", "1", "-w", str(timeout * 1000), host]
-           if platform.system().lower() == "windows"
+           if is_win
            else ["ping", "-c", "1", "-W", str(timeout), host])
+
     try:
+        # We use a short timeout in subprocess to prevent hanging
         r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                            timeout=timeout + 3, creationflags=_NO_WIN)
+
         out = r.stdout.decode(errors="ignore")
-        if r.returncode != 0: return False, -1.0
-        m = re.search(r"[Tt]ime[=<](\d+(?:\.\d+)?)\s*ms", out)
-        return True, float(m.group(1)) if m else (True, 0.0)
-    except: return False, -1.0
+        err = r.stderr.decode(errors="ignore")
+
+        if r.returncode != 0:
+            # Check for common permission issues (ICMP blocked or raw socket error)
+            if any(msg in err.lower() or msg in out.lower() for msg in
+                   ["not permitted", "permission denied", "socket error"]):
+                return False, -2.0
+            return False, -1.0
+
+        # Refined regex to handle different OS output formats
+        # Windows: "time=10ms", "time<1ms"
+        # Linux: "time=10.5 ms"
+        m = re.search(r"time[=<](\d+(?:\.\d+)?)\s*ms", out, re.I)
+        if m:
+            return True, float(m.group(1))
+
+        # If return code was 0 but we couldn't parse time, it's still a success
+        return True, 0.0
+
+    except subprocess.TimeoutExpired:
+        return False, -1.0
+    except Exception:
+        return False, -1.0
 
 
 # ══════════════════════════════════════════════════════════════
@@ -288,53 +316,74 @@ class RTTBar(tk.Canvas):
 
 
 # ══════════════════════════════════════════════════════════════
-#  KPI CARD  — animated counter
+#  KPI CARD  — Redesigned for Network Nexus
 # ══════════════════════════════════════════════════════════════
 class KPICard(tk.Frame):
-    def __init__(self, parent, label, icon, color, subtitle="", **kw):
+    def __init__(self, parent, label, icon, color, subtitle="", kind="normal", **kw):
         super().__init__(parent, bg=C["surface"],
                          highlightbackground=C["border"],
                          highlightthickness=1, **kw)
         self._color    = color
         self._label    = label
+        self._kind     = kind
         self._current  = 0.0
         self._target   = 0.0
+        self._total    = 1.0
         self._is_text  = False
         self._text_val = "—"
         self._anim     = None
+        self._history  = deque(maxlen=30)
 
         # Top accent line
-        tk.Frame(self, bg=color, height=2).pack(fill=tk.X)
+        tk.Frame(self, bg=color, height=3).pack(fill=tk.X)
 
         body = tk.Frame(self, bg=C["surface"])
-        body.pack(fill=tk.BOTH, padx=18, pady=14)
+        body.pack(fill=tk.BOTH, padx=18, pady=16)
 
-        # Header row
-        hr = tk.Frame(body, bg=C["surface"])
+        # Left side info
+        info = tk.Frame(body, bg=C["surface"])
+        info.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        hr = tk.Frame(info, bg=C["surface"])
         hr.pack(fill=tk.X)
         tk.Label(hr, text=icon, bg=C["surface"],
-                 fg=color, font=F(11)).pack(side=tk.LEFT)
+                 fg=color, font=F(12)).pack(side=tk.LEFT)
         tk.Label(hr, text=f"  {label}", bg=C["surface"],
-                 fg=C["text2"], font=F(10, bold=True)).pack(side=tk.LEFT)
+                 fg=C["text2"], font=F(9, bold=True)).pack(side=tk.LEFT)
 
-        # Big number
-        self.lbl_val = tk.Label(body, text="—", bg=C["surface"],
-                                fg=color, font=F(34, bold=True))
-        self.lbl_val.pack(anchor="w", pady=(4, 0))
+        self.lbl_val = tk.Label(info, text="—", bg=C["surface"],
+                                fg=color, font=F(28, bold=True))
+        self.lbl_val.pack(anchor="w", pady=(2, 0))
 
         if subtitle:
-            tk.Label(body, text=subtitle, bg=C["surface"],
-                     fg=C["text3"], font=F(9)).pack(anchor="w")
+            tk.Label(info, text=subtitle, bg=C["surface"],
+                     fg=C["text3"], font=F(8, bold=True)).pack(anchor="w")
 
-    def set_value(self, val):
-        """val can be int, float, or a string like '2.3%'."""
+        # Right side graphic
+        if kind != "normal":
+            self.canvas = tk.Canvas(body, width=65, height=65, bg=C["surface"], highlightthickness=0)
+            self.canvas.pack(side=tk.RIGHT, padx=(10, 0))
+            self.canvas.bind("<Configure>", lambda e: self._draw_graphic())
+
+    def set_value(self, val, total=None):
+        if total is not None: self._total = float(total)
+
         if isinstance(val, str):
             self._is_text  = True
             self._text_val = val
             self.lbl_val.config(text=val)
+            # Try to parse float for sparkline history
+            if self._kind == "sparkline":
+                try:
+                    num = float(re.findall(r"[-+]?\d*\.\d+|\d+", val)[0])
+                    self._history.append(num)
+                except: pass
         else:
             self._is_text = False
             self._target  = float(val)
+            if self._kind == "sparkline":
+                self._history.append(self._target)
+
             if self._anim: self._anim.stop()
             self._anim = Animator(self, self._current, self._target,
                                   duration=600, easing="ease_out",
@@ -342,23 +391,60 @@ class KPICard(tk.Frame):
                                   on_done=lambda: None)
             self._anim.start()
 
+        self._draw_graphic()
+
     def _on_anim(self, v):
         self._current = v
-        self.lbl_val.config(text=str(int(round(v))))
+        if not self._is_text:
+            self.lbl_val.config(text=str(int(round(v))))
+        self._draw_graphic()
+
+    def _draw_graphic(self):
+        if not hasattr(self, "canvas"): return
+        self.canvas.delete("all")
+        w, h = 65, 65
+        cx, cy = w/2, h/2
+
+        if self._kind == "circular":
+            r = 24
+            # Track
+            self.canvas.create_oval(cx-r, cy-r, cx+r, cy+r, outline=C["border"], width=4)
+            # Progress
+            if self._total > 0:
+                extent = (self._current / self._total) * 359.9
+                self.canvas.create_arc(cx-r, cy-r, cx+r, cy+r, outline=self._color,
+                                       width=4, style=tk.ARC, start=90, extent=-extent)
+                # Centered percentage
+                perc = int((self._current / self._total) * 100)
+                self.canvas.create_text(cx, cy, text=f"{perc}%", fill=C["text"], font=F(8, bold=True))
+
+        elif self._kind == "sparkline" and len(self._history) > 1:
+            points = []
+            h_list = list(self._history)
+            min_v, max_v = min(h_list), max(h_list)
+            rng = max_v - min_v if max_v != min_v else 1.0
+
+            for i, v in enumerate(h_list):
+                x = (i / (len(h_list) - 1)) * (w - 10) + 5
+                y = h - ((v - min_v) / rng * (h - 20) + 10)
+                points.extend([x, y])
+
+            if len(points) >= 4:
+                self.canvas.create_line(points, fill=self._color, width=2, smooth=True)
 
 
 # ══════════════════════════════════════════════════════════════
-#  DEVICE TILE  — polished card with smooth status transitions
+#  DEVICE TILE  — Redesigned for Network Nexus
 # ══════════════════════════════════════════════════════════════
 class DeviceTile(tk.Frame):
-    W, H = 200, 110
+    W, H = 220, 130
 
     # status -> (bg, border, fg, status_str)
     STATES = {
-        "online":   (C["green_bg"],  C["green"],  C["green"],  "Online"),
-        "offline":  (C["red_bg"],    C["red"],    C["red"],    "Offline"),
-        "degraded": (C["amber_bg"],  C["amber"],  C["amber"],  "Degraded"),
-        "waiting":  (C["surface"],   C["border"], C["text3"],  "Waiting"),
+        "online":   (C["surface"], C["green"],  C["green"],  "ONLINE"),
+        "offline":  (C["surface"], C["red"],    C["red"],    "OFFLINE"),
+        "degraded": (C["surface"], C["amber"],  C["amber"],  "DEGRADED"),
+        "waiting":  (C["surface"], C["border"], C["text3"],  "WAITING"),
     }
 
     def __init__(self, parent, device, app, **kw):
@@ -385,77 +471,70 @@ class DeviceTile(tk.Frame):
                        highlightbackground=border,
                        highlightthickness=1)
 
-        # Top accent stripe
-        self._stripe = tk.Frame(self, bg=border, height=2)
-        self._stripe.pack(fill=tk.X)
-
         # Content
         content = tk.Frame(self, bg=bg)
-        content.pack(fill=tk.BOTH, expand=True, padx=12, pady=(8, 10))
+        content.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
         self._content = content
 
-        # Row 1: pulse dot + name
-        r1 = tk.Frame(content, bg=bg)
-        r1.pack(fill=tk.X)
-        self._dot = PulseDot(r1, "waiting", bg=bg)
-        self._dot.pack(side=tk.LEFT, padx=(0, 6))
-        self._lbl_name = tk.Label(r1, text=self.device["name"],
-                                  bg=bg, fg=C["text"],
-                                  font=F(11, bold=True),
-                                  wraplength=self.W - 50,
-                                  justify="left", anchor="w")
-        self._lbl_name.pack(side=tk.LEFT, fill=tk.X)
+        # Header: Name + Pulse
+        hdr = tk.Frame(content, bg=bg)
+        hdr.pack(fill=tk.X)
 
-        # Row 2: IP
+        self._lbl_name = tk.Label(hdr, text=self.device["name"].upper(),
+                                  bg=bg, fg=C["text"],
+                                  font=F(12, bold=True),
+                                  wraplength=self.W - 60,
+                                  justify="left", anchor="w")
+        self._lbl_name.pack(side=tk.LEFT)
+
+        self._dot = PulseDot(hdr, "waiting", bg=bg)
+        self._dot.pack(side=tk.RIGHT)
+
+        # IP
         self._lbl_ip = tk.Label(content, text=self.device["ip"],
                                 bg=bg, fg=C["text3"],
-                                font=FM(9))
-        self._lbl_ip.pack(anchor="w", pady=(2, 6))
+                                font=FM(9, bold=True))
+        self._lbl_ip.pack(anchor="w", pady=(2, 10))
 
-        # Row 3: RTT bar + value
-        r3 = tk.Frame(content, bg=bg)
-        r3.pack(fill=tk.X)
-        self._rtt_bar = RTTBar(r3, bg=bg)
-        self._rtt_bar.pack(side=tk.LEFT)
-        self._lbl_rtt = tk.Label(r3, text="—",
-                                 bg=bg, fg=C["text3"],
-                                 font=FM(9))
-        self._lbl_rtt.pack(side=tk.LEFT, padx=(8, 0))
-        self._lbl_status = tk.Label(r3, text="Waiting",
-                                    bg=bg, fg=C["text3"],
-                                    font=F(9))
-        self._lbl_status.pack(side=tk.RIGHT)
+        # Stats Area
+        stats = tk.Frame(content, bg=bg)
+        stats.pack(fill=tk.X, side=tk.BOTTOM)
+
+        # RTT Label
+        rtt_cont = tk.Frame(stats, bg=bg)
+        rtt_cont.pack(side=tk.LEFT)
+        tk.Label(rtt_cont, text="LATENCY", bg=bg, fg=C["text3"], font=F(7, bold=True)).pack(anchor="w")
+        self._lbl_rtt = tk.Label(rtt_cont, text="—", bg=bg, fg=C["text"], font=FM(10, bold=True))
+        self._lbl_rtt.pack(anchor="w")
+
+        # Status Label
+        st_cont = tk.Frame(stats, bg=bg)
+        st_cont.pack(side=tk.RIGHT)
+        tk.Label(st_cont, text="STATUS", bg=bg, fg=C["text3"], font=F(7, bold=True)).pack(anchor="e")
+        self._lbl_status = tk.Label(st_cont, text="WAITING", bg=bg, fg=fg, font=F(8, bold=True))
+        self._lbl_status.pack(anchor="e")
 
         self._bg = bg
 
     def update_status(self, status, rtt=-1):
-        if status == self._status and abs(rtt - self._rtt) < 1: return
-        old_status  = self._status
+        if status == self._status and abs(rtt - self._rtt) < 0.1: return
         self._status = status
         self._rtt    = rtt
 
         bg, border, fg, status_str = self.STATES.get(status, self.STATES["waiting"])
 
         self.configure(bg=bg, highlightbackground=border)
-        self._stripe.configure(bg=border)
         self._content.configure(bg=bg)
         self._dot.set_status(status)
         self._dot.set_bg(bg)
         self._lbl_name.configure(bg=bg, fg=C["text"])
         self._lbl_ip.configure(bg=bg)
-        self._rtt_bar.configure(bg=bg)
         self._lbl_status.configure(bg=bg, fg=fg, text=status_str)
 
         if rtt >= 0:
-            thr = self.device.get("thresholds", {"green": 50, "yellow": 150, "red": 300})
-            self._lbl_rtt.configure(bg=bg, fg=fg,
-                                    text=f"{rtt:.0f} ms")
-            # Normalize RTT to 0..1 (0=fast, 1=slow) capped at red threshold
-            norm = min(rtt / max(thr.get("red", 300), 1), 1.0)
-            self._rtt_bar.set_value(norm)
+            self._lbl_rtt.configure(bg=bg, fg=C["text"], text=f"{rtt:.1f} MS")
         else:
             self._lbl_rtt.configure(bg=bg, fg=C["text3"], text="—")
-            self._rtt_bar.set_value(0.0)
 
         self._bg = bg
 
@@ -961,28 +1040,42 @@ class PingMonitorApp(tk.Tk):
 
     # ── Header ──────────────────────────────────────────────
     def _build_header(self):
-        hdr = tk.Frame(self, bg=C["surface"], height=66)
+        hdr = tk.Frame(self, bg=C["bg"], height=80)
         hdr.pack(fill=tk.X); hdr.pack_propagate(False)
-        tk.Frame(hdr, bg=C["accent"], width=3).pack(side=tk.LEFT, fill=tk.Y)
 
-        left = tk.Frame(hdr, bg=C["surface"])
-        left.pack(side=tk.LEFT, padx=20, pady=10)
-        tk.Label(left, text="Ping Monitor",
-                 bg=C["surface"], fg=C["text"],
-                 font=F(16, bold=True)).pack(anchor="w")
-        tk.Label(left, text="Network Health Dashboard",
-                 bg=C["surface"], fg=C["text3"],
-                 font=F(9)).pack(anchor="w")
+        # Left side: Logo/Title
+        left = tk.Frame(hdr, bg=C["bg"])
+        left.pack(side=tk.LEFT, padx=30, pady=15)
 
-        right = tk.Frame(hdr, bg=C["surface"])
-        right.pack(side=tk.RIGHT, padx=24)
-        self.lbl_date = tk.Label(right, text="",
-                                 bg=C["surface"], fg=C["text3"], font=F(9))
-        self.lbl_date.pack(anchor="e")
+        # Icon placeholder (Network Nexus often has a hexagon or similar)
+        tk.Label(left, text="⬢", bg=C["bg"], fg=C["accent"],
+                 font=F(24)).pack(side=tk.LEFT, padx=(0, 15))
+
+        title_cont = tk.Frame(left, bg=C["bg"])
+        title_cont.pack(side=tk.LEFT)
+        tk.Label(title_cont, text="NETWORK NEXUS",
+                 bg=C["bg"], fg=C["text"],
+                 font=F(20, bold=True)).pack(anchor="w")
+        tk.Label(title_cont, text="INFRASTRUCTURE DASHBOARD",
+                 bg=C["bg"], fg=C["accent"],
+                 font=F(8, bold=True)).pack(anchor="w")
+
+        # Right side: Clock/Date
+        right = tk.Frame(hdr, bg=C["bg"])
+        right.pack(side=tk.RIGHT, padx=30)
+
         self.lbl_clock = tk.Label(right, text="",
-                                  bg=C["surface"], fg=C["text"],
-                                  font=F(18, bold=True))
+                                  bg=C["bg"], fg=C["text"],
+                                  font=F(22, bold=True))
         self.lbl_clock.pack(anchor="e")
+
+        date_cont = tk.Frame(right, bg=C["bg"])
+        date_cont.pack(anchor="e")
+        tk.Label(date_cont, text="●", bg=C["bg"], fg=C["green"],
+                 font=F(8)).pack(side=tk.LEFT, padx=(0, 5))
+        self.lbl_date = tk.Label(date_cont, text="",
+                                 bg=C["bg"], fg=C["text2"], font=F(10, bold=True))
+        self.lbl_date.pack(side=tk.LEFT)
 
         tk.Frame(self, bg=C["border"], height=1).pack(fill=tk.X)
 
@@ -995,76 +1088,77 @@ class PingMonitorApp(tk.Tk):
     # ── KPI Cards ───────────────────────────────────────────
     def _build_kpi(self):
         row = tk.Frame(self, bg=C["bg"])
-        row.pack(fill=tk.X, padx=20, pady=(16, 8))
+        row.pack(fill=tk.X, padx=25, pady=(20, 10))
         self._kpi_cards = {}
 
-        for label, key, color, icon, sub in [
-            ("Total Devices", "total", C["accent"],  "◈", "All monitored hosts"),
-            ("Online",        "up",    C["green"],   "●", "Currently reachable"),
-            ("Offline",       "down",  C["red"],     "●", "Not responding"),
-            ("Avg Packet Loss","loss", C["amber"],   "▲", "Loss across all hosts"),
-            ("Avg RTT",       "rtt",   "#bc8cff",    "⟳", "Round-trip time (ms)"),
-        ]:
-            card = KPICard(row, label, icon, color, sub)
-            card.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=5)
+        # Mapped to the 4 summary cards in the image
+        configs = [
+            ("TOTAL MONITORED", "total", C["accent"], "◈", "Infrastructure scale", "normal"),
+            ("ONLINE NODES",    "up",    C["green"],  "●", "Operational status", "circular"),
+            ("OFFLINE NODES",   "down",  C["red"],    "●", "Critical issues",     "normal"),
+            ("LATENCY AVG",     "rtt",   C["amber"],  "⟳", "Network performance", "sparkline"),
+        ]
+
+        for label, key, color, icon, sub, kind in configs:
+            card = KPICard(row, label, icon, color, sub, kind=kind)
+            card.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=8)
             self._kpi_cards[key] = card
 
     def _refresh_kpi(self):
         total = len(self._devices)
         up    = sum(1 for s in self._stats.values() if s.get("last_ok") is True)
         down  = sum(1 for s in self._stats.values() if s.get("last_ok") is False)
-        losses, rtts = [], []
+        rtts = []
         for s in self._stats.values():
-            if s.get("sent", 0) > 0:
-                losses.append((1 - s["received"] / s["sent"]) * 100)
             rtts.extend(list(s.get("rtt_samples", [])))
+
         self._kpi_cards["total"].set_value(total)
-        self._kpi_cards["up"].set_value(up)
+        self._kpi_cards["up"].set_value(up, total=total)
         self._kpi_cards["down"].set_value(down)
-        self._kpi_cards["loss"].set_value(
-            f"{sum(losses)/len(losses):.1f}%" if losses else "0%")
-        self._kpi_cards["rtt"].set_value(
-            f"{sum(rtts)/len(rtts):.0f} ms" if rtts else "—")
+
+        avg_rtt = sum(rtts)/len(rtts) if rtts else 0
+        self._kpi_cards["rtt"].set_value(f"{avg_rtt:.0f} ms" if rtts else "—")
+
         self.after(1500, self._refresh_kpi)
 
     # ── Toolbar ─────────────────────────────────────────────
     def _build_toolbar(self):
-        bar = tk.Frame(self, bg=C["surface"],
-                       highlightbackground=C["border"], highlightthickness=1)
-        bar.pack(fill=tk.X, padx=20, pady=(0, 12))
+        bar = tk.Frame(self, bg=C["bg"])
+        bar.pack(fill=tk.X, padx=25, pady=(5, 15))
 
-        def sep():
-            tk.Frame(bar, bg=C["border"], width=1).pack(
-                side=tk.LEFT, fill=tk.Y, pady=8, padx=8)
+        # Action Buttons container (stylized as seen in the Action Bar of the image)
+        actions = tk.Frame(bar, bg=C["bg"])
+        actions.pack(side=tk.LEFT)
+
+        SmoothButton(actions, "  ⊞ NODE MANAGEMENT ",  self._add_device,   "primary", 10, 15, 10).pack(side=tk.LEFT, padx=5)
+        SmoothButton(actions, "  ⚙ ALERT SETTINGS ",   lambda: None,        "ghost",   10, 15, 10).pack(side=tk.LEFT, padx=5)
+        SmoothButton(actions, "  📁 EXPORT DATA ",      self._export_csv,    "ghost",   10, 15, 10).pack(side=tk.LEFT, padx=5)
+        SmoothButton(actions, "  ✚ NEW GROUP ",       self._add_group,     "ghost",   10, 15, 10).pack(side=tk.LEFT, padx=5)
+
+        # Settings container
+        settings = tk.Frame(bar, bg=C["bg"])
+        settings.pack(side=tk.RIGHT)
 
         def spin(lbl, var, lo, hi):
-            tk.Label(bar, text=lbl, bg=C["surface"],
-                     fg=C["text2"], font=F(10)).pack(
-                side=tk.LEFT, padx=(10, 4), pady=10)
-            sp = tk.Spinbox(bar, from_=lo, to=hi, textvariable=var,
-                            width=4, bg=C["input"], fg=C["text"],
+            tk.Label(settings, text=lbl, bg=C["bg"],
+                     fg=C["text2"], font=F(9, bold=True)).pack(
+                side=tk.LEFT, padx=(10, 5))
+            sp = tk.Spinbox(settings, from_=lo, to=hi, textvariable=var,
+                            width=3, bg=C["surface"], fg=C["text"],
                             buttonbackground=C["surface2"],
-                            relief="flat", font=FM(11),
+                            relief="flat", font=FM(10, bold=True),
                             highlightbackground=C["border"],
                             highlightthickness=1)
-            sp.pack(side=tk.LEFT, padx=(0, 4), ipady=6, pady=8)
+            sp.pack(side=tk.LEFT, ipady=5)
 
-        SmoothButton(bar, "  New Group",  self._add_group,    "ghost",   11, 14, 8).pack(side=tk.LEFT, padx=(6,2), pady=8)
-        SmoothButton(bar, "  Add Device", self._add_device,   "primary", 11, 14, 8).pack(side=tk.LEFT, padx=2, pady=8)
-        sep()
-        SmoothButton(bar, "  Edit",       self._edit_selected,"default", 11, 12, 8).pack(side=tk.LEFT, padx=2, pady=8)
-        SmoothButton(bar, "  Remove",     self._remove_sel,   "danger",  11, 12, 8).pack(side=tk.LEFT, padx=2, pady=8)
-        SmoothButton(bar, "  Clear Group",self._clear_group,  "ghost",   11, 12, 8).pack(side=tk.LEFT, padx=2, pady=8)
-        sep()
-        spin("Interval (s)", self.var_interval, 1, 300)
-        spin("Timeout (s)",  self.var_timeout,  1, 30)
+        spin("INTERVAL", self.var_interval, 1, 300)
+        spin("TIMEOUT",  self.var_timeout,  1, 30)
 
-        tk.Frame(bar, bg=C["surface"]).pack(side=tk.LEFT, expand=True)
-        SmoothButton(bar, "  Export CSV", self._export_csv, "ghost", 11, 12, 8).pack(side=tk.RIGHT, padx=(2, 6), pady=8)
-        sep()
-        self.btn_toggle = SmoothButton(bar, "  Start Monitoring",
-                                       self._toggle_mon, "success", 11, 16, 8)
-        self.btn_toggle.pack(side=tk.RIGHT, padx=2, pady=8)
+        tk.Frame(settings, bg=C["bg"], width=20).pack(side=tk.LEFT)
+
+        self.btn_toggle = SmoothButton(settings, "  ▶ START ENGINE ",
+                                       self._toggle_mon, "success", 10, 15, 10)
+        self.btn_toggle.pack(side=tk.LEFT, padx=(10, 0))
 
     # ── Tabs ────────────────────────────────────────────────
     def _build_tabs(self):
@@ -1127,7 +1221,7 @@ class PingMonitorApp(tk.Tk):
             tk.Label(f, text="No groups yet",
                      bg=C["bg"], fg=C["text2"],
                      font=F(20, bold=True)).pack(pady=(10, 4))
-            tk.Label(f, text='Click  "New Group"  in the toolbar to get started',
+            tk.Label(f, text='Click  "NEW GROUP"  in the toolbar to get started',
                      bg=C["bg"], fg=C["text3"], font=F(11)).pack()
             return
 
@@ -1136,42 +1230,48 @@ class PingMonitorApp(tk.Tk):
 
             # Group section
             sec = tk.Frame(self._dash_inner, bg=C["bg"])
-            sec.pack(fill=tk.X, padx=22, pady=(18, 6))
+            sec.pack(fill=tk.X, padx=30, pady=(20, 10))
 
             # Header row
             hr = tk.Frame(sec, bg=C["bg"])
-            hr.pack(fill=tk.X, pady=(0, 10))
-            tk.Label(hr, text=grp, bg=C["bg"], fg=C["text"],
-                     font=F(13, bold=True)).pack(side=tk.LEFT)
-            tk.Label(hr, text=f"  {len(devs)} device{'s' if len(devs)!=1 else ''}",
-                     bg=C["bg"], fg=C["text3"],
-                     font=F(10)).pack(side=tk.LEFT, pady=2)
+            hr.pack(fill=tk.X, pady=(0, 15))
 
-            SmoothButton(hr, " Rename ", lambda g=grp: self._rename_group(g),
-                         "ghost", 9, 8, 4).pack(side=tk.RIGHT, padx=2)
-            SmoothButton(hr, " Delete ", lambda g=grp: self._delete_group(g),
-                         "danger", 9, 8, 4).pack(side=tk.RIGHT, padx=2)
+            tk.Label(hr, text="⊞", bg=C["bg"], fg=C["accent"], font=F(14)).pack(side=tk.LEFT)
+            tk.Label(hr, text=f"  {grp.upper()}", bg=C["bg"], fg=C["text"],
+                     font=F(14, bold=True)).pack(side=tk.LEFT)
+            tk.Label(hr, text=f"  ({len(devs)} NODES)",
+                     bg=C["bg"], fg=C["accent"],
+                     font=F(9, bold=True)).pack(side=tk.LEFT, pady=3)
+
+            SmoothButton(hr, " RENAME ", lambda g=grp: self._rename_group(g),
+                         "ghost", 8, 10, 5).pack(side=tk.RIGHT, padx=5)
+            SmoothButton(hr, " DELETE ", lambda g=grp: self._delete_group(g),
+                         "danger", 8, 10, 5).pack(side=tk.RIGHT, padx=5)
 
             # Separator
-            tk.Frame(sec, bg=C["border"], height=1).pack(fill=tk.X, pady=(0, 12))
+            tk.Frame(sec, bg=C["border"], height=1).pack(fill=tk.X, pady=(0, 20))
 
             # Tiles
             if not devs:
                 tk.Label(sec,
-                         text="No devices — click  Add Device  to add one",
+                         text="NO DEVICES CONFIGURED IN THIS GROUP",
                          bg=C["bg"], fg=C["text3"],
-                         font=F(11)).pack(anchor="w", pady=(0, 10))
+                         font=F(10, bold=True)).pack(anchor="w", pady=(0, 10))
             else:
                 wrap = tk.Frame(sec, bg=C["bg"])
                 wrap.pack(fill=tk.X)
+
+                # Using a grid-like flow with Wrap behavior emulated by Frame management
                 row_f = None
+                tiles_per_row = 6
                 for i, dev in enumerate(devs):
-                    if i % 7 == 0:
+                    if i % tiles_per_row == 0:
                         row_f = tk.Frame(wrap, bg=C["bg"])
-                        row_f.pack(anchor="w", pady=(0, 10))
+                        row_f.pack(anchor="w", pady=(0, 15))
                     tile = DeviceTile(row_f, dev, self)
-                    tile.pack(side=tk.LEFT, padx=(0, 10))
+                    tile.pack(side=tk.LEFT, padx=(0, 15))
                     self._tiles[dev["ip"]] = tile
+
                     # Restore state
                     if dev["ip"] in self._stats:
                         s  = self._stats[dev["ip"]]
@@ -1521,7 +1621,7 @@ class PingMonitorApp(tk.Tk):
             self.btn_toggle._fg  = C["green"]
             self.btn_toggle._hbg = C["green_bg"]
             self.btn_toggle._hfg = C["green"]
-            self.btn_toggle.config(text="  Start Monitoring",
+            self.btn_toggle.config(text="  ▶ START ENGINE ",
                                    bg=C["green_bg"], fg=C["green"])
             self._set_status("  Monitoring stopped")
         else:
@@ -1532,7 +1632,7 @@ class PingMonitorApp(tk.Tk):
             self.btn_toggle._fg  = C["red"]
             self.btn_toggle._hbg = C["red_bg"]
             self.btn_toggle._hfg = C["red"]
-            self.btn_toggle.config(text="  Stop Monitoring",
+            self.btn_toggle.config(text="  ■ STOP ENGINE ",
                                    bg=C["red_bg"], fg=C["red"])
             for d in self._devices: self._start_mon(d["ip"])
             self._set_status(f"  Monitoring {len(self._devices)} device(s)")
@@ -1560,9 +1660,11 @@ class PingMonitorApp(tk.Tk):
         if not dev or ip not in self._stats: return
         s = self._stats[ip]
         s["sent"] += 1
-        if ok: s["received"] += 1
-        if ok and lat >= 0:
-            s["rtt_samples"].append(lat); s["last_rtt"] = lat
+
+        if ok:
+            s["received"] += 1
+            s["rtt_samples"].append(lat)
+            s["last_rtt"] = lat
         else:
             s["last_rtt"] = -1
         s["last_ok"] = ok
@@ -1571,7 +1673,11 @@ class PingMonitorApp(tk.Tk):
         if ok:
             ts = "degraded" if (lat >= 0 and lat >= thr["red"]) else "online"
         else:
-            ts = "offline"
+            if lat == -2.0:
+                ts = "waiting" # Treat permission error as waiting/unknown
+                self._set_status(f"  ⚠ PERMISSION DENIED for {dev['name']} [{ip}]. Check Firewall/Privileges.")
+            else:
+                ts = "offline"
         if ip in self._tiles:
             self._tiles[ip].update_status(ts, lat if ok else -1)
 
